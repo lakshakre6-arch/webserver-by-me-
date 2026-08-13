@@ -1,428 +1,158 @@
-const express = require("express");
+const express = require('express');
+const path = require('path');
+const { smarthome } = require('actions-on-google');
 
 const app = express();
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Render provides the PORT through the environment.
-// 10000 is used when running locally.
 const PORT = process.env.PORT || 10000;
 
-// Smart switch state
-let switchState = false;
-let lastUpdated = new Date().toISOString();
+// Express Middlewares
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-function updateState(value) {
-  switchState = Boolean(value);
-  lastUpdated = new Date().toISOString();
-}
+// LED State stored in memory
+let ledState = false;
 
+// -------------------------------------------------------------
+// 1. ESP32 & Web Dashboard Endpoints
+// -------------------------------------------------------------
+app.get('/api/led/status', (req, res) => {
+    res.json({ status: ledState ? "ON" : "OFF", state: ledState });
+});
 
-// =====================================================
-// MAIN DASHBOARD
-// =====================================================
-
-app.get("/", (req, res) => {
-  res.send(`
-<!DOCTYPE html>
-<html lang="en">
-
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <title>Smart Switch Dashboard</title>
-
-  <style>
-
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      min-height: 100vh;
-
-      display: flex;
-      justify-content: center;
-      align-items: center;
-
-      font-family: Arial, sans-serif;
-
-      background: linear-gradient(
-        135deg,
-        #101828,
-        #1d2939
-      );
-
-      color: white;
-    }
-
-    .card {
-      width: min(92%, 520px);
-
-      padding: 35px;
-
-      text-align: center;
-
-      border-radius: 24px;
-
-      background: rgba(255, 255, 255, 0.10);
-
-      box-shadow:
-        0 20px 60px rgba(0, 0, 0, 0.30);
-
-      backdrop-filter: blur(12px);
-    }
-
-    h1 {
-      margin-top: 0;
-      font-size: 36px;
-    }
-
-    .subtitle {
-      opacity: 0.75;
-      margin-bottom: 30px;
-    }
-
-    .state {
-      font-size: 48px;
-      font-weight: bold;
-
-      margin: 30px 0;
-    }
-
-    button {
-      border: none;
-
-      border-radius: 14px;
-
-      padding: 15px 30px;
-
-      margin: 6px;
-
-      font-size: 17px;
-
-      cursor: pointer;
-
-      transition: transform 0.2s;
-    }
-
-    button:hover {
-      transform: scale(1.05);
-    }
-
-    .on {
-      background: #12b76a;
-      color: white;
-    }
-
-    .off {
-      background: #f04438;
-      color: white;
-    }
-
-    .info {
-      margin-top: 25px;
-
-      opacity: 0.75;
-
-      font-size: 14px;
-    }
-
-  </style>
-
-</head>
-
-<body>
-
-  <div class="card">
-
-    <h1>Smart Switch</h1>
-
-    <div class="subtitle">
-      ESP32 Smart Switch Control
-    </div>
-
-    <div id="state" class="state">
-      Loading...
-    </div>
-
-    <button
-      class="on"
-      onclick="setSwitch(true)">
-      TURN ON
-    </button>
-
-    <button
-      class="off"
-      onclick="setSwitch(false)">
-      TURN OFF
-    </button>
-
-    <div id="info" class="info">
-      Connecting to server...
-    </div>
-
-  </div>
-
-
-<script>
-
-async function loadStatus() {
-
-  try {
-
-    const response = await fetch("/status");
-
-    const data = await response.json();
-
-    const stateElement =
-      document.getElementById("state");
-
-    const infoElement =
-      document.getElementById("info");
-
-
-    if (data.on) {
-
-      stateElement.textContent = "ON";
-
+app.post('/api/led/toggle', (req, res) => {
+    if (req.body.state !== undefined) {
+        ledState = Boolean(req.body.state);
     } else {
+        ledState = !ledState;
+    }
+    res.json({ success: true, status: ledState ? "ON" : "OFF", state: ledState });
+});
 
-      stateElement.textContent = "OFF";
+// -------------------------------------------------------------
+// 2. Google OAuth2 Login & Authorization Page
+// -------------------------------------------------------------
 
+// Direct GET Authorization Handler
+app.get(['/auth', '/oauth/authorize'], (req, res) => {
+    const redirectUri = req.query.redirect_uri;
+    const state = req.query.state;
+
+    // If Google Home provides redirect parameters, send immediate authorization redirect URL
+    if (redirectUri && state) {
+        const targetUrl = `${redirectUri}?code=valid_dummy_code&state=${state}`;
+        
+        return res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>Linking Smart Switch...</title>
+                <style>
+                    body { font-family: sans-serif; text-align: center; padding: 50px 20px; background: #0f172a; color: #fff; }
+                    .card { background: #1e293b; padding: 30px; border-radius: 16px; max-width: 320px; margin: auto; }
+                    .btn { display: inline-block; background: #3b82f6; color: white; text-decoration: none; padding: 14px 28px; font-size: 16px; font-weight: bold; border-radius: 8px; margin-top: 20px; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h2>Connecting...</h2>
+                    <p>Click below if Google Home doesn't redirect automatically.</p>
+                    <a href="${targetUrl}" class="btn">Complete Authorization</a>
+                </div>
+                <script>
+                    // Auto-trigger the redirect for Google Home's Webview
+                    window.location.href = "${targetUrl}";
+                </script>
+            </body>
+            </html>
+        `);
     }
 
+    res.status(200).send("OAuth Authorization Endpoint Active");
+});
 
-    infoElement.textContent =
-      "Last updated: " +
-      new Date(data.lastUpdated).toLocaleString();
-
-  }
-
-  catch (error) {
-
-    document.getElementById("state")
-      .textContent = "Server Error";
-
-    document.getElementById("info")
-      .textContent = "Unable to connect to server.";
-
-  }
-
-}
-
-
-async function setSwitch(value) {
-
-  try {
-
-    await fetch("/toggle", {
-
-      method: "POST",
-
-      headers: {
-        "Content-Type": "application/json"
-      },
-
-      body: JSON.stringify({
-        on: value
-      })
-
+// Token Exchange Endpoint (GET & POST supported)
+app.all(['/token', '/oauth/token'], (req, res) => {
+    res.json({
+        token_type: 'bearer',
+        access_token: 'valid_access_token_123',
+        refresh_token: 'valid_refresh_token_123',
+        expires_in: 86400
     });
-
-    loadStatus();
-
-  }
-
-  catch (error) {
-
-    console.error(error);
-
-  }
-
-}
-
-
-// Load status immediately
-loadStatus();
-
-
-// Automatically update every 1 second
-setInterval(loadStatus, 1000);
-
-</script>
-
-</body>
-
-</html>
-  `);
 });
 
-
-// =====================================================
-// STATUS ROUTE
-// =====================================================
-
-app.get("/status", (req, res) => {
-
-  res.json({
-
-    on: switchState,
-
-    lastUpdated: lastUpdated
-
-  });
-
+// -------------------------------------------------------------
+// 3. Google Smart Home Fulfillment Engine
+// -------------------------------------------------------------
+const appSmartHome = smarthome({
+    jwt: null
 });
 
-
-// =====================================================
-// TOGGLE ROUTE
-// =====================================================
-
-app.post("/toggle", (req, res) => {
-
-  if (typeof req.body.on !== "undefined") {
-
-    updateState(req.body.on);
-
-  } else {
-
-    updateState(!switchState);
-
-  }
-
-
-  res.json({
-
-    success: true,
-
-    on: switchState,
-
-    lastUpdated: lastUpdated
-
-  });
-
+appSmartHome.onSync((body) => {
+    return {
+        requestId: body.requestId,
+        payload: {
+            agentUserId: 'esp32_user_1',
+            devices: [{
+                id: 'esp32_switch_1',
+                type: 'action.devices.types.SWITCH',
+                traits: ['action.devices.traits.OnOff'],
+                name: {
+                    defaultNames: ['ESP32 Smart Switch'],
+                    name: 'Smart Switch',
+                    nicknames: ['Switch', 'Light']
+                },
+                willReportState: false
+            }]
+        }
+    };
 });
 
-
-// =====================================================
-// UPDATE ROUTE
-// ESP32 can use this route
-// =====================================================
-
-app.post("/update", (req, res) => {
-
-  if (typeof req.body.on === "undefined") {
-
-    return res.status(400).json({
-
-      success: false,
-
-      error:
-        'Send JSON like {"on":true} or {"on":false}'
-
-    });
-
-  }
-
-
-  updateState(req.body.on);
-
-
-  res.json({
-
-    success: true,
-
-    on: switchState,
-
-    lastUpdated: lastUpdated
-
-  });
-
+appSmartHome.onQuery((body) => {
+    return {
+        requestId: body.requestId,
+        payload: {
+            devices: {
+                esp32_switch_1: {
+                    on: ledState,
+                    online: true
+                }
+            }
+        }
+    };
 });
 
+appSmartHome.onExecute((body) => {
+    const commands = body.inputs[0].payload.commands;
+    const results = [];
 
-// =====================================================
-// OAUTH AUTHORIZE ROUTE
-// =====================================================
+    for (const command of commands) {
+        for (const execution of command.execution) {
+            if (execution.command === 'action.devices.commands.OnOff') {
+                ledState = execution.params.on;
+                results.push({
+                    ids: [command.devices[0].id],
+                    status: 'SUCCESS',
+                    states: {
+                        on: ledState,
+                        online: true
+                    }
+                });
+            }
+        }
+    }
 
-app.get("/oauth/authorize", (req, res) => {
-
-  res.status(501).json({
-
-    error: "not_implemented",
-
-    message:
-      "OAuth authorization is not configured yet."
-
-  });
-
+    return {
+        requestId: body.requestId,
+        payload: {
+            commands: results
+        }
+    };
 });
 
+app.post('/smarthome', appSmartHome);
 
-// =====================================================
-// OAUTH TOKEN ROUTE
-// =====================================================
-
-app.post("/oauth/token", (req, res) => {
-
-  res.status(501).json({
-
-    error: "not_implemented",
-
-    message:
-      "OAuth token exchange is not configured yet."
-
-  });
-
-});
-
-
-// =====================================================
-// GOOGLE SMART HOME FULFILLMENT
-// =====================================================
-
-app.post("/google-fulfillment", (req, res) => {
-
-  res.status(501).json({
-
-    error: "not_implemented",
-
-    message:
-      "Google Smart Home fulfillment is not configured yet."
-
-  });
-
-});
-
-
-// =====================================================
-// HEALTH CHECK
-// =====================================================
-
-app.get("/health", (req, res) => {
-
-  res.json({
-
-    status: "ok"
-
-  });
-
-});
-
-
-// =====================================================
-// START SERVER
-// =====================================================
-
-app.listen(PORT, "0.0.0.0", () => {
-
-  console.log(
-    `Smart Switch Server running on port ${PORT}`
-  );
-
+app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
 });
